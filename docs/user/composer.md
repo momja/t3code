@@ -132,6 +132,18 @@ The quoted text and comment count toward the message limit.
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
 
+## Ask a temporary question
+
+On web and desktop, select text in an assistant response and choose **Ask** beside
+**Cite**. Enter a one-off question to see the answer in a popup. Closing it cancels
+any answer still running and discards the question and answer; neither is added
+to the conversation or composer.
+
+Ask uses the session's most recent completed response and the same model. It
+currently supports Codex and Claude. Each question starts from the conversation,
+so a later question does not remember earlier popup answers. Native forks reuse
+the conversation prefix, while cache availability remains controlled by the provider.
+
 ## Recall a sent prompt
 
 Press `ArrowUp` in an empty composer to bring back the last prompt you sent in this thread. Press

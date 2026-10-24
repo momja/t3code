@@ -483,6 +483,11 @@ function isClaudeAgentSdkQueryToolList(
 type ClaudeAgentSdkThreadIdentity =
   | {
       readonly sessionId: string;
+      readonly resume: string;
+      readonly forkSession: true;
+    }
+  | {
+      readonly sessionId: string;
       readonly resume?: never;
     }
   | {
@@ -4013,6 +4018,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     );
 
   return ProviderAdapter.ProviderAdapterV2.of({
+    supportsEphemeralFork: true,
     instanceId: adapterOptions.instanceId,
     driver: CLAUDE_PROVIDER,
     getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
@@ -4109,6 +4115,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           );
         });
         const openedNativeThreads = yield* Ref.make(new Set<string>());
+        const ephemeralForkSources = new Map<string, string>();
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         // Claude 5 task tools edit one list per native session, across turns.
         const taskListsByNativeThread = yield* Ref.make(
@@ -9190,7 +9197,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         ) {
           const queryPolicy = yield* queryPolicyForTurn(turnInput);
           const mcpOverrides = claudeMcpQueryOverrides({
-            mcpSession: yield* mcpSessions.read(turnInput.threadId),
+            mcpSession: yield* mcpSessions.read(
+              input.ephemeral === true
+                ? (input.ephemeralSourceThreadId ?? turnInput.threadId)
+                : turnInput.threadId,
+            ),
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             ...(queryPolicy.allowedTools === undefined
@@ -9334,7 +9345,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             .open({
               threadId: turnInput.threadId,
               providerSessionId: input.providerSessionId,
-              options: queryOptions,
+              options:
+                input.ephemeral === true
+                  ? {
+                      ...queryOptions,
+                      resume: ephemeralForkSources.get(nativeThreadId)!,
+                      sessionId: nativeThreadId,
+                      forkSession: true as const,
+                      persistSession: false,
+                    }
+                  : queryOptions,
             })
             .pipe(
               Effect.onError(() =>
@@ -10417,6 +10437,35 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const sourceNativeThreadId = yield* getNativeThreadId(forkInput.sourceProviderThread);
               yield* closeLiveQueryForNativeThread(sourceNativeThreadId);
               const upToMessageId = yield* resolveClaudeForkUpToMessageId(forkInput);
+              if (input.ephemeral === true) {
+                // SDK query forks in memory; forkSession() would write a transcript before we ask.
+                const nativeThreadId = yield* crypto.randomUUIDv4();
+                ephemeralForkSources.set(nativeThreadId, sourceNativeThreadId);
+                const forkedThread = makeProviderThread({
+                  idAllocator,
+                  providerInstanceId: adapterOptions.instanceId,
+                  appThreadId: forkInput.targetThreadId,
+                  ownerNodeId: forkInput.ownerNodeId ?? null,
+                  providerSessionId: input.providerSessionId,
+                  nativeThreadId,
+                  forkedFrom: { providerThreadId: forkInput.sourceProviderThread.id },
+                  ...(upToMessageId === undefined
+                    ? {}
+                    : { nativeMetadata: { forkHeadMessageId: upToMessageId } }),
+                  now: yield* DateTime.now,
+                });
+                return {
+                  ...forkedThread,
+                  nativeConversationHeadRef:
+                    upToMessageId === undefined
+                      ? null
+                      : {
+                          driver: CLAUDE_PROVIDER,
+                          nativeId: upToMessageId,
+                          strength: "weak" as const,
+                        },
+                };
+              }
               const forkOptions: ForkSessionOptions = {
                 ...(input.runtimePolicy.cwd === null ? {} : { dir: input.runtimePolicy.cwd }),
                 ...(upToMessageId === undefined ? {} : { upToMessageId }),

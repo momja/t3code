@@ -1563,7 +1563,7 @@ describe("ClaudeAdapterV2 attachments", () => {
 });
 
 describe("ClaudeAdapterV2 native fork", () => {
-  it.effect("forks at the source assistant cursor and resumes the forked session", () =>
+  it.effect.each([false, true])("forks at the source cursor (ephemeral: %s)", (ephemeral) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -1612,6 +1612,7 @@ describe("ClaudeAdapterV2 native fork", () => {
         const sourceThreadId = ThreadId.make("thread-claude-fork-source");
         const targetThreadId = ThreadId.make("thread-claude-fork-target");
         const runtime = yield* adapter.openSession({
+          ...(ephemeral ? { ephemeral: true as const } : {}),
           threadId: sourceThreadId,
           providerSessionId,
           modelSelection: {
@@ -1661,21 +1662,31 @@ describe("ClaudeAdapterV2 native fork", () => {
           targetThreadId,
         });
 
-        assert.deepEqual(forkCalls, [
-          {
-            sessionId: "source-native-session",
-            options: {
-              dir: "/workspace",
-              upToMessageId: "assistant-message-cursor",
-            },
-            environment: { CLAUDE_CONFIG_DIR: "/custom/claude-home" },
-            threadId: targetThreadId,
-            providerSessionId,
-          },
-        ]);
-        assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, "forked-native-session");
+        assert.deepEqual(
+          forkCalls,
+          ephemeral
+            ? []
+            : [
+                {
+                  sessionId: "source-native-session",
+                  options: {
+                    dir: "/workspace",
+                    upToMessageId: "assistant-message-cursor",
+                  },
+                  environment: { CLAUDE_CONFIG_DIR: "/custom/claude-home" },
+                  threadId: targetThreadId,
+                  providerSessionId,
+                },
+              ],
+        );
+        if (ephemeral) {
+          assert.notEqual(forkedProviderThread.nativeThreadRef?.nativeId, "source-native-session");
+        } else {
+          assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, "forked-native-session");
+        }
         assert.equal(forkedProviderThread.forkedFrom?.providerThreadId, sourceProviderThread.id);
-        assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, providerTurnId);
+        if (!ephemeral)
+          assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, providerTurnId);
 
         yield* runtime.startTurn({
           appThread: {
@@ -1733,8 +1744,25 @@ describe("ClaudeAdapterV2 native fork", () => {
           }),
         });
 
-        assert.equal(openedQueries[0]?.options.resume, "forked-native-session");
-        assert.equal(openedQueries[0]?.options.sessionId, undefined);
+        assert.equal(
+          openedQueries[0]?.options.resume,
+          ephemeral ? "source-native-session" : "forked-native-session",
+        );
+        if (ephemeral) {
+          assert.equal(
+            openedQueries[0]?.options.sessionId,
+            forkedProviderThread.nativeThreadRef?.nativeId,
+          );
+          assert.equal(openedQueries[0]?.options.forkSession, true);
+          assert.equal(openedQueries[0]?.options.persistSession, false);
+          assert.equal(openedQueries[0]?.options.resumeSessionAt, "assistant-message-cursor");
+          assert.deepEqual(openedQueries[0]?.options.tools, {
+            type: "preset",
+            preset: "claude_code",
+          });
+        } else {
+          assert.equal(openedQueries[0]?.options.sessionId, undefined);
+        }
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

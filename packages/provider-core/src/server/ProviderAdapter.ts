@@ -403,6 +403,10 @@ export const ProviderAdapterV2Error = Schema.Union([
 export type ProviderAdapterV2Error = typeof ProviderAdapterV2Error.Type;
 
 export interface ProviderAdapterV2OpenSessionInput {
+  /** Session output must not be materialized in the provider's conversation history. */
+  readonly ephemeral?: true;
+  /** Reuse the source's tool configuration so an ephemeral fork keeps its cached prefix. */
+  readonly ephemeralSourceThreadId?: ThreadId;
   readonly threadId: ThreadId;
   readonly providerSessionId: ProviderSessionId;
   readonly modelSelection: ModelSelection;
@@ -649,6 +653,7 @@ export class ProviderAdapterV2 extends Context.Service<
   {
     readonly instanceId: ProviderInstanceId;
     readonly driver: ProviderDriverKind;
+    readonly supportsEphemeralFork?: true;
     readonly getCapabilities: () => Effect.Effect<
       OrchestrationV2ProviderCapabilities,
       ProviderAdapterV2Error

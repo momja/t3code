@@ -881,6 +881,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.void,
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
+    ephemeral = false,
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -938,6 +939,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       });
       const threadId = ThreadId.make(`thread-${transcript.scenario}`);
       const runtime = yield* adapter.openSession({
+        ...(ephemeral ? { ephemeral: true as const } : {}),
         threadId,
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
@@ -5689,6 +5691,65 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         "thread/rollback",
         "thread/rollback must not be sent to a legacy Codex thread",
       );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("uses an ephemeral native fork for temporary questions", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "ephemeral-source";
+      const transcript = makeCodexReplayTranscript({
+        scenario: "ephemeral-fork",
+        entries: [
+          ...codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId: "unused",
+            prompt: "unused",
+          }).slice(0, 5),
+          {
+            type: "expect_outbound",
+            label: "thread/fork",
+            frame: {
+              id: 3,
+              method: "thread/fork",
+              params: {
+                threadId: nativeThreadId,
+                ephemeral: true,
+                config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "thread/fork",
+            frame: {
+              id: 3,
+              result: codexReplayThreadResult({
+                nativeThreadId: "ephemeral-target",
+                forkedFromId: nativeThreadId,
+              }),
+            },
+          },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(
+        transcript,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      const source = JSON.stringify(harness.providerThread);
+      const forked = yield* harness.runtime.forkThread({
+        sourceProviderThread: harness.providerThread,
+        targetThreadId: ThreadId.make("temporary-question"),
+      });
+      assert.equal(forked.nativeThreadRef?.nativeId, "ephemeral-target");
+      assert.equal(JSON.stringify(harness.providerThread), source);
     }).pipe(
       Effect.scoped,
       Effect.provide(

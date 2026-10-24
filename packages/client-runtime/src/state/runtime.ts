@@ -1,6 +1,6 @@
 import type { QueryPersistence } from "./queryPersistence.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
-import { followStreamInEnvironment } from "./environmentStreams.ts";
+import { followStreamInEnvironment, runStreamInEnvironment } from "./environmentStreams.ts";
 import { reuseUnchanged } from "./serverConfigProjection.ts";
 export { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
 import {
@@ -27,9 +27,11 @@ import {
   type EnvironmentRpcStreamValue,
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
+  type EnvironmentStreamCommandRpcTag,
   EnvironmentRpcUnavailableError,
   request,
   requestGuarded,
+  runStreamGuarded,
   RpcPermissionGuard,
   subscribe,
 } from "../rpc/client.ts";
@@ -835,6 +837,44 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
         : options.transform(stream);
     },
   });
+}
+
+/** A mounted stream command is cancelled on unmount and is never replayed on reconnect. */
+export function createEnvironmentRpcStreamCommand<
+  R,
+  ER,
+  TTag extends EnvironmentStreamCommandRpcTag,
+>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  options: { readonly label: string; readonly tag: TTag },
+) {
+  const permissions = createCommandPermissions(runtime, options.tag);
+  return {
+    permissionAtom: permissions.permissionAtom,
+    stream: (target: {
+      readonly environmentId: EnvironmentIdType;
+      readonly input: EnvironmentRpcInput<TTag>;
+    }) =>
+      runtime
+        .atom(
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const registry = yield* AtomRegistry.AtomRegistry;
+              yield* permissions.authorize(registry, target.environmentId, target.input);
+              return runStreamInEnvironment(
+                target.environmentId,
+                runStreamGuarded(options.tag, target.input).pipe(
+                  Stream.provideService(RpcPermissionGuard, {
+                    authorize: (id, method, input) =>
+                      createCommandPermissions(runtime, method).authorize(registry, id, input),
+                  }),
+                ),
+              );
+            }),
+          ),
+        )
+        .pipe(Atom.setIdleTTL(0), Atom.withLabel(options.label)),
+  };
 }
 
 export function createEnvironmentRpcCommand<

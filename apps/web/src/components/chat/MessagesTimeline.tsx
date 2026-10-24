@@ -1103,6 +1103,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           >
             {onCiteAssistantText && citationThreadRef ? (
               <AssistantSelectionToolbar
+                key={`${citationThreadRef.environmentId}:${citationThreadRef.threadId}`}
                 viewport={timelineViewportElement}
                 threadRef={citationThreadRef}
                 onCite={onCiteAssistantText}
